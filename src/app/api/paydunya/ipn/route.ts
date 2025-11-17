@@ -2,7 +2,7 @@ import { db } from '@/db/client';
 import { auditLogs, entitlements, ipnEvents, payments } from '@/db/schema';
 import { serverError } from '@/lib/http';
 import { jsonRes } from '@/lib/logger';
-import { verifyIpnSignature } from '@/lib/paydunya';
+import { mergePaydunyaStatus, verifyIpnSignature } from '@/lib/paydunya';
 import { eq } from 'drizzle-orm';
 import { NextRequest } from 'next/server';
 
@@ -83,6 +83,11 @@ export async function POST(req: NextRequest) {
       return jsonRes({ ok: true, duplicate: true }, 200);
     }
 
+    if (!signatureOk) {
+      // Ne pas traiter sans signature valide
+      return jsonRes({ ok: false, error: 'Invalid signature' }, 403);
+    }
+
     // Trouver payment par token
     // Extraction robuste du token:
     // - token / reference à la racine
@@ -119,9 +124,50 @@ export async function POST(req: NextRequest) {
       status = 'FAILED';
     }
 
-    await db.update(payments).set({ status }).where(eq(payments.id, pay.id));
+    // Validation montant/devise avant de confirmer COMPLETED
+    const invoiceObj = (maybeInvoice && typeof maybeInvoice === 'object') ? (maybeInvoice as Record<string, unknown>) : {};
+    const rawAmount =
+      (typeof invoiceObj['total_amount'] === 'number' || typeof invoiceObj['total_amount'] === 'string') ? invoiceObj['total_amount']
+      : (payload['amount'] as unknown);
+    const rawCurrency =
+      (typeof invoiceObj['currency'] === 'string') ? invoiceObj['currency']
+      : (typeof payload['currency'] === 'string' ? (payload['currency'] as string) : undefined);
 
-    if (status === 'COMPLETED') {
+    const receivedAmount = typeof rawAmount === 'string' ? Number(rawAmount) : (typeof rawAmount === 'number' ? rawAmount : NaN);
+    const receivedCurrency = typeof rawCurrency === 'string' ? rawCurrency.toUpperCase() : undefined;
+
+    const expectedAmount = pay.amount;
+    const expectedCurrency = (pay.currency || '').toUpperCase();
+
+    const amountOk = Number.isFinite(receivedAmount) ? receivedAmount === expectedAmount : true; // si non fourni, on ne bloque pas
+    const currencyOk = receivedCurrency ? (receivedCurrency === expectedCurrency) : true; // si non fourni, on ne bloque pas
+
+    if (status === 'COMPLETED' && (!amountOk || !currencyOk)) {
+      // Ne pas promouvoir en COMPLETED
+      await db.insert(auditLogs).values({
+        uid: pay.uid,
+        action: 'PAYMENT_MISMATCH',
+        meta: {
+          provider: 'paydunya',
+          token,
+          expectedAmount,
+          receivedAmount,
+          expectedCurrency,
+          receivedCurrency,
+          where: 'ipn'
+        }
+      });
+      // Répondre 200 pour ne pas faire échouer le callback PayDunya, mais sans accorder les droits
+      return jsonRes({ ok: false, mismatch: true }, 200);
+    }
+
+    // Idempotence: ne pas rétrograder
+    const merged = mergePaydunyaStatus(pay.status as 'PENDING'|'COMPLETED'|'FAILED', status);
+    if (merged !== pay.status) {
+      await db.update(payments).set({ status: merged }).where(eq(payments.id, pay.id));
+    }
+
+    if (merged === 'COMPLETED') {
       // Grant BOTH entitlements for a single successful payment
       const resources = ['BOOK_PART_2','BOOK_PART_3'] as const;
       for (const resourceId of resources) {
