@@ -26,7 +26,7 @@ import { error, log } from './logger';
  */
 
 type CreateInvoiceParams = {
-  planId: 'BOOK_PART_2'|'BOOK_PART_3';
+  planId: string; // Accepte maintenant n'importe quel planId (BOOK_PART_2, BOOK_PART_3, ou DONATION_*)
   amount: number;
   description: string;
   callbackUrl: string; // IPN webhook

@@ -31,7 +31,7 @@ function PaymentReturnContent() {
             
             // Rediriger vers l'app mobile avec le token
             setTimeout(() => {
-              window.location.href = `attaqwa://paydunya/success?token=${token}`;
+              window.location.href = `samaquete://payment/return?token=${token}`;
             }, 2000);
           } else if (data.status === 'pending' || data.status === 'PENDING') {
             setStatus('success');
@@ -39,7 +39,7 @@ function PaymentReturnContent() {
             
             // Rediriger vers l'app mobile avec le token même si en cours
             setTimeout(() => {
-              window.location.href = `attaqwa://paydunya/success?token=${token}`;
+              window.location.href = `samaquete://payment/return?token=${token}`;
             }, 2000);
           } else {
             setStatus('error');
@@ -58,7 +58,7 @@ function PaymentReturnContent() {
     checkPaymentStatus();
   }, [searchParams]);
 
-  const mobileUrl = `attaqwa://paydunya/success?token=${searchParams.get('token') || ''}`;
+  const mobileUrl = `samaquete://payment/return?token=${searchParams.get('token') || ''}`;
   
   return (
     <html>
