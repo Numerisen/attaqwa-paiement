@@ -5,15 +5,23 @@ import { badRequest, serverError } from '@/lib/http';
 import { error, jsonRes, log } from '@/lib/logger';
 import { createCheckoutInvoice } from '@/lib/paydunya';
 import { rateLimit } from '@/lib/ratelimit';
+import { donationCheckoutSchema, validateAndParse } from '@/lib/validation';
 import type { NextRequest } from 'next/server';
 import crypto from 'crypto';
 
 export const runtime = 'nodejs';
 
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
+const corsOrigin = (origin: string | null) => {
+  if (!origin) return '*';
+  if (allowedOrigins.length === 0) return '*';
+  return allowedOrigins.includes(origin) ? origin : null;
+};
+
 /**
- * Obtenir l'UID de l'utilisateur si authentifié, sinon générer un UID anonyme
+ * Obtenir l'UID de l'utilisateur si authentifié, sinon utiliser l'UID anonyme fourni ou en générer un
  */
-async function getUserId(req: NextRequest): Promise<string> {
+async function getUserId(req: NextRequest, body?: { anonymousUid?: string }): Promise<string> {
   const auth = req.headers.get('authorization') || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   
@@ -27,9 +35,18 @@ async function getUserId(req: NextRequest): Promise<string> {
     }
   }
   
-  // Générer un UID anonyme unique basé sur l'IP et le timestamp
+  // Pour les utilisateurs anonymes, accepter un UID anonyme dans le header ou le body
+  const anonymousUid = req.headers.get('x-anonymous-uid') || body?.anonymousUid;
+  
+  if (anonymousUid && anonymousUid.startsWith('anonymous_')) {
+    log('Using provided anonymous UID', { uid: anonymousUid });
+    return anonymousUid;
+  }
+  
+  // Générer un nouvel UID anonyme uniquement si aucun n'est fourni
   const clientIp = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown';
-  const anonymousId = `anonymous_${crypto.createHash('md5').update(`${clientIp}_${Date.now()}`).digest('hex').substring(0, 16)}`;
+  const anonymousId = `anonymous_${crypto.randomBytes(16).toString('hex')}`;
+  log('Generated new anonymous UID', { uid: anonymousId });
   return anonymousId;
 }
 
@@ -57,39 +74,35 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: 'Rate limit exceeded' }, { status: 429 });
     }
 
-    // Obtenir l'UID (authentifié ou anonyme)
-    const uid = await getUserId(req);
-    const isAnonymous = !hasAuth;
-    const body = await req.json().catch(() => ({}));
+    // Parser et valider le body avec Zod
+    const rawBody = await req.json().catch(() => ({}));
+    const validation = validateAndParse(donationCheckoutSchema, rawBody);
+    if (!validation.success) {
+      return badRequest(validation.error);
+    }
+    const body = validation.data;
     
-    const donationType = body?.donationType as string;
-    const amount = typeof body?.amount === 'number' ? body.amount : Number(body?.amount);
-    const description = body?.description || `Don ${donationType || 'général'}`;
-    const parishId = body?.parishId as string | undefined;
-
-    // Validation du type de don
-    const validDonationTypes = ['quete', 'denier', 'cierge', 'messe'];
-    if (!donationType || !validDonationTypes.includes(donationType)) {
-      return badRequest('Invalid donationType. Must be one of: quete, denier, cierge, messe');
-    }
-
-    // Validation du montant
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return badRequest('Invalid amount. Must be a positive number');
-    }
-
-    // Pas de limite maximale - accepte 10000, 100000, 1000000, etc.
-    if (amount < 100) {
-      return badRequest('Amount must be at least 100 FCFA');
-    }
+    // Obtenir l'UID (authentifié ou anonyme) - utiliser l'UID du body si fourni
+    const uid = await getUserId(req, { anonymousUid: body.anonymousUid });
+    const isAnonymous = !hasAuth;
+    
+    const donationType = body.donationType;
+    const amount = body.amount;
+    const description = body.description || `Don ${donationType}`;
+    const parishId = body.parishId;
 
     // Créer un planId unique pour le don
     const planId = `DONATION_${donationType.toUpperCase()}_${Date.now()}`;
 
-    const baseUrl = process.env.BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
+    // Utiliser l'URL de production par défaut au lieu de localhost
+    // Vercel fournit automatiquement VERCEL_URL, mais on préfère BASE_URL si défini
+    const baseUrl = process.env.BASE_URL || 
+                    process.env.NEXT_PUBLIC_BASE_URL || 
+                    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'https://payment-api-pink.vercel.app');
     const callbackUrl = `${baseUrl}/api/paydunya/ipn`;
     const cancelUrl = `${baseUrl}/payment/cancel`;
-    const returnUrl = `${baseUrl}/payment/return?token={token}`;
+    // PayDunya ajoute automatiquement le token à l'URL de retour, ne pas mettre {token} dans l'URL
+    const returnUrl = `${baseUrl}/payment/return`;
 
     // Créer la facture PayDunya avec le montant personnalisé
     const invoice = await createCheckoutInvoice({ 
@@ -131,7 +144,8 @@ export async function POST(req: NextRequest) {
       checkout_url: invoice.checkout_url,
       amount,
       donationType,
-      planId
+      planId,
+      uid: uid // Retourner l'UID (authentifié ou anonyme) pour que l'app puisse le stocker
     }, 201);
   } catch (err: unknown) {
     error('Donation checkout error', err);
@@ -141,10 +155,11 @@ export async function POST(req: NextRequest) {
 
 // CORS pour les requêtes depuis l'app mobile
 export async function OPTIONS() {
+  const origin = corsOrigin(null);
   return new Response(null, { 
     status: 204,
     headers: {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': origin || '*',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
       'Access-Control-Allow-Methods': 'POST,OPTIONS',
     }

@@ -4,6 +4,7 @@ import { badRequest, serverError } from '@/lib/http';
 import { jsonRes, log } from '@/lib/logger';
 import { mergePaydunyaStatus } from '@/lib/paydunya';
 import { rateLimit } from '@/lib/ratelimit';
+import { statusQuerySchema, validateAndParse } from '@/lib/validation';
 import { eq } from 'drizzle-orm';
 import { NextRequest } from 'next/server';
 
@@ -17,8 +18,13 @@ export async function GET(req: NextRequest) {
       return Response.json({ error: 'Rate limit exceeded' }, { status: 429 });
     }
 
-    const token = new URL(req.url).searchParams.get('token');
-    if (!token) return badRequest('token required');
+    // Validation avec Zod
+    const tokenParam = new URL(req.url).searchParams.get('token');
+    const validation = validateAndParse(statusQuerySchema, { token: tokenParam });
+    if (!validation.success) {
+      return badRequest(validation.error);
+    }
+    const { token } = validation.data;
     
     const [row] = await db.select().from(payments).where(eq(payments.providerToken, token));
     if (!row) {

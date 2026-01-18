@@ -5,6 +5,7 @@ import { badRequest, serverError } from '@/lib/http';
 import { error, jsonRes, log } from '@/lib/logger';
 import { createCheckoutInvoice } from '@/lib/paydunya';
 import { rateLimit } from '@/lib/ratelimit';
+import { checkoutSchema, validateAndParse } from '@/lib/validation';
 import { NextRequest } from 'next/server';
 
 export const runtime = 'nodejs';
@@ -27,8 +28,14 @@ export async function POST(req: NextRequest) {
     }
 
     const uid = await requireUser(req);
-    const body = await req.json().catch(()=> ({}));
-    const planId = body?.planId as 'BOOK_PART_2'|'BOOK_PART_3';
+    
+    // Validation avec Zod
+    const rawBody = await req.json().catch(() => ({}));
+    const validation = validateAndParse(checkoutSchema, rawBody);
+    if (!validation.success) {
+      return badRequest(validation.error);
+    }
+    const { planId } = validation.data;
     
     if (!PLAN_PRICES[planId]) return badRequest('Invalid planId');
 

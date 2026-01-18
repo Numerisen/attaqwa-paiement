@@ -1,8 +1,10 @@
 import { db } from '@/db/client';
 import { entitlements, payments } from '@/db/schema';
-import { badRequest, serverError } from '@/lib/http';
+import { requireAdmin } from '@/lib/adminAuth';
+import { badRequest, serverError, unauthorized } from '@/lib/http';
 import { jsonRes } from '@/lib/logger';
 import { rateLimit } from '@/lib/ratelimit';
+import { forceCompleteSchema, validateAndParse } from '@/lib/validation';
 import { eq } from 'drizzle-orm';
 import { NextRequest } from 'next/server';
 
@@ -16,8 +18,21 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: 'Rate limit exceeded' }, { status: 429 });
     }
 
-    const { token, planId } = await req.json();
-    if (!token || !planId) return badRequest('token and planId required');
+    // 🔒 AUTHENTIFICATION ADMIN REQUISE
+    let adminUid: string;
+    try {
+      adminUid = await requireAdmin(req);
+    } catch {
+      return unauthorized('Admin authentication required');
+    }
+
+    // Validation avec Zod
+    const body = await req.json().catch(() => ({}));
+    const validation = validateAndParse(forceCompleteSchema, body);
+    if (!validation.success) {
+      return badRequest(validation.error);
+    }
+    const { token, planId } = validation.data;
     
     // Vérifier que le paiement existe
     const [payment] = await db.select().from(payments).where(eq(payments.providerToken, token));
@@ -52,10 +67,12 @@ export async function POST(req: NextRequest) {
 }
 
 export async function OPTIONS() {
+  const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
+  const origin = allowedOrigins.length > 0 ? allowedOrigins[0] : '*';
   return new Response(null, { 
     status: 204,
     headers: {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': origin,
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
       'Access-Control-Allow-Methods': 'POST,OPTIONS',
     }

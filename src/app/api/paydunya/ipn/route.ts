@@ -8,6 +8,13 @@ import { NextRequest } from 'next/server';
 
 export const runtime = 'nodejs';
 
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
+const corsOrigin = (origin: string | null) => {
+  if (!origin) return '*';
+  if (allowedOrigins.length === 0) return '*';
+  return allowedOrigins.includes(origin) ? origin : null;
+};
+
 export async function POST(req: NextRequest) {
   try {
     const raw = await req.text(); // garder le raw pour signature
@@ -193,13 +200,32 @@ export async function POST(req: NextRequest) {
 }
 
 // Route legacy pour compatibilité
+// Handler GET pour éviter l'erreur 405 quand quelqu'un visite l'URL directement
+export async function GET() {
+  return new Response(
+    JSON.stringify({ 
+      message: 'IPN endpoint - POST only',
+      description: 'This endpoint only accepts POST requests from PayDunya. It cannot be accessed via browser.',
+      status: 'active'
+    }),
+    { 
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      }
+    }
+  );
+}
+
 export async function OPTIONS() {
+  const origin = corsOrigin(null);
   return new Response(null, { 
     status: 204,
     headers: {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': origin || '*',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Allow-Methods': 'POST,OPTIONS',
+      'Access-Control-Allow-Methods': 'POST,OPTIONS,GET',
     }
   });
 } 

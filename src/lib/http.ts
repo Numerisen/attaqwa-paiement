@@ -1,6 +1,6 @@
 export function badRequest(msg='Bad Request'){ return Response.json({error:msg},{status:400});}
-export function unauthorized(){ return Response.json({error:'Unauthorized'},{status:401});}
-export function forbidden(){ return Response.json({error:'Forbidden'},{status:403});}
+export function unauthorized(msg='Unauthorized'){ return Response.json({error:msg},{status:401});}
+export function forbidden(msg='Forbidden'){ return Response.json({error:msg},{status:403});}
 export function serverError(err: unknown) {
   const payload =
     err instanceof Error
