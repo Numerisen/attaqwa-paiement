@@ -169,6 +169,7 @@ export async function POST(req: NextRequest) {
       await fs.collection('admin_donations').doc(docId).set(
         {
           donorName,
+          fullname: donorName, // Alias pour compatibilité admin paroisse
           amount: Math.round(amount),
           type: donationType,
           date: new Date().toISOString(),
