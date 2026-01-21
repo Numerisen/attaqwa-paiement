@@ -5,6 +5,8 @@ import { jsonRes } from '@/lib/logger';
 import { mergePaydunyaStatus, verifyIpnSignature } from '@/lib/paydunya';
 import { eq } from 'drizzle-orm';
 import { NextRequest } from 'next/server';
+import { getFirestoreAdmin } from '@/lib/firestoreAdmin';
+import { FieldValue } from 'firebase-admin/firestore';
 
 export const runtime = 'nodejs';
 
@@ -172,6 +174,28 @@ export async function POST(req: NextRequest) {
     const merged = mergePaydunyaStatus(pay.status as 'PENDING'|'COMPLETED'|'FAILED', status);
     if (merged !== pay.status) {
       await db.update(payments).set({ status: merged }).where(eq(payments.id, pay.id));
+    }
+
+    // 🔁 Synchroniser le statut dans Firestore (admin_donations)
+    // Doc ID = paydunya_${token} (créé lors du checkout)
+    try {
+      const fs = getFirestoreAdmin();
+      const docId = `paydunya_${token}`;
+      const adminStatus =
+        merged === 'COMPLETED' ? 'confirmed'
+        : merged === 'FAILED' ? 'cancelled'
+        : 'pending';
+
+      await fs.collection('admin_donations').doc(docId).set(
+        {
+          status: adminStatus,
+          providerStatus: merged,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error('Firestore admin_donations sync failed (ipn):', e);
     }
 
     if (merged === 'COMPLETED') {

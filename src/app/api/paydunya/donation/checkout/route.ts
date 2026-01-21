@@ -8,6 +8,8 @@ import { rateLimit } from '@/lib/ratelimit';
 import { donationCheckoutSchema, validateAndParse } from '@/lib/validation';
 import type { NextRequest } from 'next/server';
 import crypto from 'crypto';
+import { getFirestoreAdmin } from '@/lib/firestoreAdmin';
+import { FieldValue } from 'firebase-admin/firestore';
 
 export const runtime = 'nodejs';
 
@@ -137,6 +139,60 @@ export async function POST(req: NextRequest) {
         isAnonymous
       }
     });
+
+    // 🔁 Synchronisation vers Firestore pour l'interface admin (admin_donations)
+    // L'admin ne lit pas la DB payment-api, elle lit Firestore (collection admin_donations)
+    try {
+      const fs = getFirestoreAdmin();
+      let parishName: string | undefined;
+      let dioceseName: string | undefined;
+      let dioceseId: string | undefined;
+
+      if (parishId) {
+        const parishSnap = await fs.collection('parishes').doc(parishId).get();
+        if (parishSnap.exists) {
+          const p = parishSnap.data() as Record<string, unknown>;
+          parishName = typeof p.name === 'string' ? p.name : undefined;
+          dioceseName =
+            (typeof p.dioceseName === 'string' ? p.dioceseName : undefined) ||
+            (typeof p.diocese === 'string' ? p.diocese : undefined);
+          dioceseId = typeof p.dioceseId === 'string' ? p.dioceseId : undefined;
+        }
+      }
+
+      const donorName =
+        (typeof (validation.data as any)?.donorName === 'string' && (validation.data as any)?.donorName) ||
+        (isAnonymous ? 'Donateur anonyme' : 'Utilisateur');
+
+      // Doc ID basé sur le token PayDunya pour idempotence (même paiement → même doc)
+      const docId = `paydunya_${invoice.token}`;
+      await fs.collection('admin_donations').doc(docId).set(
+        {
+          donorName,
+          amount: Math.round(amount),
+          type: donationType,
+          date: new Date().toISOString(),
+          diocese: dioceseName || 'Non spécifié',
+          parish: parishName || 'Non spécifié',
+          description,
+          status: 'pending',
+          // Champs de liaison
+          uid,
+          parishId: parishId || null,
+          dioceseId: dioceseId || null,
+          provider: 'paydunya',
+          providerToken: invoice.token,
+          paymentId: row.id,
+          source: 'mobile',
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      // Ne pas bloquer le checkout si Firestore est indisponible
+      log('Firestore admin_donations sync failed (checkout)', { error: e instanceof Error ? e.message : String(e) });
+    }
 
     return jsonRes({ 
       paymentId: row.id, 
