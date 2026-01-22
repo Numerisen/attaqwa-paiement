@@ -10,6 +10,11 @@
  *   - Accès en écriture à Firestore (Firebase Admin)
  */
 
+// Charger les variables d'environnement depuis .env
+import { config } from 'dotenv';
+import { resolve } from 'path';
+config({ path: resolve(__dirname, '../.env') });
+
 import { db } from '../src/db/client';
 import { payments } from '../src/db/schema';
 import { getFirestoreAdmin } from '../src/lib/firestoreAdmin';

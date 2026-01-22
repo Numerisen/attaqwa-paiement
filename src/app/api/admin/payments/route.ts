@@ -27,9 +27,14 @@ export async function GET(req: NextRequest) {
     // Récupérer tous les paiements
     const allPayments = await db.select().from(payments).orderBy(payments.createdAt);
     
+    // Filtrer seulement les dons (planId commence par DONATION_)
+    // Note: Le filtrage par parishId/dioceseId se fait côté client car
+    // la table payments n'a pas ces colonnes (elles sont dans Firestore admin_donations)
+    const donations = allPayments.filter(p => p.planId.startsWith('DONATION_'));
+    
     return jsonRes({ 
-      payments: allPayments,
-      total: allPayments.length
+      payments: donations, // Retourner seulement les dons
+      total: donations.length
     });
   } catch (err: unknown) {
     return serverError(err);
