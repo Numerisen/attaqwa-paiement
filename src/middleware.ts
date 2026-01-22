@@ -8,9 +8,13 @@ const parseAllowedOrigins = () =>
     .filter(Boolean);
 
 function resolveOrigin(origin: string | null, allowed: string[]) {
-  if (!origin) return null;
+  if (!origin) return '*';
+  // Autoriser localhost en développement
+  if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
+    return origin;
+  }
   if (allowed.length === 0) return '*';
-  return allowed.includes(origin) ? origin : null;
+  return allowed.includes(origin) ? origin : (allowed.length > 0 ? allowed[0] : '*');
 }
 
 export function middleware(req: NextRequest) {

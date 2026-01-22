@@ -8,12 +8,32 @@ import { NextRequest } from 'next/server';
 
 export const runtime = 'nodejs';
 
+function getCorsHeaders(origin: string | null) {
+  const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
+  
+  // En développement, autoriser localhost
+  const isLocalhost = origin?.startsWith('http://localhost:') || origin?.startsWith('http://127.0.0.1:');
+  const allowOrigin = isLocalhost ? origin : 
+                     (allowedOrigins.length > 0 && origin && allowedOrigins.includes(origin)) ? origin :
+                     allowedOrigins.length > 0 ? allowedOrigins[0] : '*';
+  
+  return {
+    'Access-Control-Allow-Origin': allowOrigin || '*',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Methods': 'GET,OPTIONS',
+    'Access-Control-Allow-Credentials': 'true',
+  };
+}
+
 export async function GET(req: NextRequest) {
   try {
+    const origin = req.headers.get('origin');
+    const corsHeaders = getCorsHeaders(origin);
+    
     // Rate limiting
     const clientIp = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown';
     if (!rateLimit(clientIp, 60, 60_000)) {
-      return Response.json({ error: 'Rate limit exceeded' }, { status: 429 });
+      return Response.json({ error: 'Rate limit exceeded' }, { status: 429, headers: corsHeaders });
     }
 
     // 🔒 AUTHENTIFICATION ADMIN REQUISE
@@ -21,7 +41,7 @@ export async function GET(req: NextRequest) {
     try {
       adminUid = await requireAdmin(req);
     } catch {
-      return unauthorized('Admin authentication required');
+      return unauthorized('Admin authentication required', corsHeaders);
     }
 
     // Récupérer tous les paiements
@@ -32,25 +52,31 @@ export async function GET(req: NextRequest) {
     // la table payments n'a pas ces colonnes (elles sont dans Firestore admin_donations)
     const donations = allPayments.filter(p => p.planId.startsWith('DONATION_'));
     
-    return jsonRes({ 
+    const response = jsonRes({ 
       payments: donations, // Retourner seulement les dons
       total: donations.length
     });
+    
+    // Ajouter les headers CORS
+    Object.entries(corsHeaders).forEach(([key, value]) => {
+      response.headers.set(key, value);
+    });
+    
+    return response;
   } catch (err: unknown) {
-    return serverError(err);
+    const origin = req.headers.get('origin');
+    const corsHeaders = getCorsHeaders(origin);
+    return serverError(err, corsHeaders);
   }
 }
 
-export async function OPTIONS() {
-  const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
-  const origin = allowedOrigins.length > 0 ? allowedOrigins[0] : '*';
+export async function OPTIONS(req: NextRequest) {
+  const origin = req.headers.get('origin');
+  const corsHeaders = getCorsHeaders(origin);
+  
   return new Response(null, { 
     status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Allow-Methods': 'GET,OPTIONS',
-    }
+    headers: corsHeaders
   });
 } 
  
