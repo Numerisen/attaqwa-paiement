@@ -54,7 +54,7 @@ function extractDonationType(planId: string): string {
   if (planId.startsWith('DONATION_')) {
     const parts = planId.split('_');
     if (parts.length >= 2) {
-      return parts[1].toLowerCase(); // quete, denier, cierge, messe
+      return parts[1].toLowerCase(); // quete, denier, cierge, prière
     }
   }
   return 'autre';
@@ -68,7 +68,7 @@ function formatDonationType(type: string): string {
     'quete': 'Quête dominicale',
     'denier': 'Denier du culte',
     'cierge': 'Cierge pascal',
-    'messe': 'Messe',
+    'prière': 'prière',
   };
   return types[type] || 'Don';
 }
@@ -158,13 +158,11 @@ export async function GET(req: NextRequest) {
     const completedDonations = donations.filter(d => d.status === 'completed');
     const pendingDonations = donations.filter(d => d.status === 'pending');
     
-    // Total de tous les dons (pending + completed) - c'est ce que l'utilisateur a "contribué"
-    const totalAmount = donations
-      .filter(d => d.status === 'completed' || d.status === 'pending')
-      .reduce((sum, d) => sum + d.amount, 0);
+    // Total seulement des dons complétés (terminés) - ne pas compter les pending
+    const totalAmount = completedDonations.reduce((sum, d) => sum + d.amount, 0);
     
     // Total seulement des dons complétés (pour référence)
-    const completedAmount = completedDonations.reduce((sum, d) => sum + d.amount, 0);
+    const completedAmount = totalAmount;
     
     const totalCount = donations.length;
     const completedCount = completedDonations.length;
